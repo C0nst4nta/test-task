@@ -5,6 +5,8 @@ import uuid
 
 import pydantic
 
+from .item import SyncItemGet
+
 
 class SyncType(enum.StrEnum):
     EMPLOYEES = 'employees'
@@ -24,31 +26,10 @@ class SyncRunStatus(enum.StrEnum):
     FAILED = 'failed'
 
 
-class SyncItemStatus(enum.StrEnum):
-    PENDING = 'pending'
-    PROCESSING = 'processing'
-    SUCCEEDED = 'succeeded'
-    FAILED = 'failed'
-
-
 class SyncRunCreate(pydantic.BaseModel):
     sync_type: SyncType = SyncType.EMPLOYEES
 
     model_config = pydantic.ConfigDict(extra='forbid')
-
-
-class SyncItemGet(pydantic.BaseModel):
-    id: uuid.UUID
-    external_id: str
-    status: SyncItemStatus
-    attempts: pydantic.NonNegativeInt
-    source_payload: dict
-    destination_response: dict | None
-    error_message: str | None
-    started_at: datetime.datetime | None
-    finished_at: datetime.datetime | None
-
-    model_config = pydantic.ConfigDict(extra='ignore', from_attributes=True)
 
 
 class SyncRunGet(pydantic.BaseModel):

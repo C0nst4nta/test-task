@@ -5,9 +5,11 @@ from .item import sync_item_list_for_run  # noqa: F401
 from .item import sync_item_start_attempt  # noqa: F401
 from .item import sync_item_succeed  # noqa: F401
 from .item import sync_item_upsert  # noqa: F401
+from .item import sync_items_requeue_interrupted  # noqa: F401
 from .run import SyncAlreadyActive  # noqa: F401
 from .run import SyncRun  # noqa: F401
 from .run import SyncRunDoesNotExist  # noqa: F401
+from .run import SyncRunNotClaimable  # noqa: F401
 from .run import SyncRunNotRetryable  # noqa: F401
 from .run import sync_current  # noqa: F401
 from .run import sync_run_claim  # noqa: F401
@@ -17,6 +19,6 @@ from .run import sync_run_fail  # noqa: F401
 from .run import sync_run_finish  # noqa: F401
 from .run import sync_run_get  # noqa: F401
 from .run import sync_run_list  # noqa: F401
-from .run import sync_run_queued_ids  # noqa: F401
 from .run import sync_run_retry  # noqa: F401
+from .run import sync_runs_queued  # noqa: F401
 from .run import sync_runs_requeue_interrupted  # noqa: F401

@@ -1,9 +1,9 @@
-import asyncio
 import logging
 import uuid
 
 import pydantic
 
+from ...core import retries
 from .. import models
 from .. import providers
 from .. import schemas
@@ -93,29 +93,27 @@ class SyncExecutor:
         item_id: uuid.UUID,
         record: schemas.EmployeeRecord,
     ) -> None:
-        error: providers.ExternalSystemError | None = None
-        for attempt in range(self._max_retries):
+        @retries.retry(
+            exception=providers.ExternalSystemError,
+            max_retries=self._max_retries,
+            max_value=self._retry_delay_seconds,
+        )
+        async def send():
             await models.sync_item_start_attempt(item_id)
-            try:
-                response = await handler.send(record)
-            except providers.ExternalSystemError as exc:
-                error = exc
-                if attempt + 1 < self._max_retries:
-                    await asyncio.sleep(self._retry_delay_seconds * (2**attempt))
-                continue
+            return await handler.send(record)
 
+        try:
+            response = await send()
+        except providers.ExternalSystemError as error:
+            await models.sync_item_fail(item_id, str(error))
+        else:
             await models.sync_item_succeed(item_id, response.model_dump(mode='json'))
-            return
-
-        await models.sync_item_fail(item_id, str(error))
 
     async def _with_retries(self, operation):
-        error: providers.ExternalSystemError | None = None
-        for attempt in range(self._max_retries):
-            try:
-                return await operation()
-            except providers.ExternalSystemError as exc:
-                error = exc
-                if attempt + 1 < self._max_retries:
-                    await asyncio.sleep(self._retry_delay_seconds * (2**attempt))
-        raise error or providers.ExternalSystemError('External system is unavailable')
+        wrapped = retries.retry_wrap(
+            operation,
+            exception=providers.ExternalSystemError,
+            max_retries=self._max_retries,
+            max_value=self._retry_delay_seconds,
+        )
+        return await wrapped()

@@ -6,11 +6,11 @@ from ... import controllers
 from ... import schemas
 
 
-router = fastapi.APIRouter(prefix='/sync-runs')
+router = fastapi.APIRouter()
 
 
 @router.post(
-    '',
+    '/sync-runs',
     summary='Queue a manual synchronization',
     response_model=schemas.SyncRunGet,
     response_description='Queued synchronization run',
@@ -23,7 +23,7 @@ async def create_sync_run(sync: schemas.SyncRunCreate):
 
 
 @router.get(
-    '',
+    '/sync-runs',
     summary='List synchronization history',
     response_model=schemas.SyncRunList,
     response_description='Synchronization runs ordered from newest to oldest',
@@ -35,7 +35,7 @@ async def list_sync_runs(
 
 
 @router.get(
-    '/current',
+    '/sync-runs/current',
     summary='Get current synchronization state',
     response_model=schemas.SyncCurrent,
     response_description='Active and most recently finished synchronization runs',
@@ -45,7 +45,7 @@ async def get_current_sync():
 
 
 @router.get(
-    '/{run_id}',
+    '/sync-runs/{run_id}',
     summary='Get synchronization run details',
     response_model=schemas.SyncRunDetail,
     response_description='Synchronization run and per-item results',
@@ -56,7 +56,7 @@ async def get_sync_run(run_id: uuid.UUID):
 
 
 @router.post(
-    '/{run_id}/retry',
+    '/sync-runs/{run_id}/retry',
     summary='Retry a failed synchronization',
     response_model=schemas.SyncRunGet,
     response_description='Queued retry run',

@@ -6,10 +6,34 @@ import fastapi
 from ..core import conf
 from ..core import postgres
 from ..core import web
+from . import models
+from . import services
 from . import v1
 
 
 logger = logging.getLogger(__name__)
+
+
+_SYNC_ERROR_RESPONSES = {
+    models.SyncAlreadyActive: (
+        409,
+        'A synchronization of this type is already queued or running',
+    ),
+    models.SyncRunDoesNotExist: (404, 'Synchronization run not found'),
+    models.SyncRunNotRetryable: (
+        409,
+        'Only failed or partially completed synchronization can be retried',
+    ),
+    services.SyncDispatchError: (503, 'Synchronization queue is unavailable'),
+}
+
+
+async def _sync_exception_handler(request: fastapi.Request, error: Exception):
+    status_code, detail = _SYNC_ERROR_RESPONSES[type(error)]
+    return fastapi.responses.ORJSONResponse(
+        status_code=status_code,
+        content={'detail': detail},
+    )
 
 
 def _health_router(database) -> fastapi.APIRouter:
@@ -53,4 +77,6 @@ def create_app(
         lifespan=lifespan,
         routers=[_health_router(database), v1.get_router()],
     )
+    for exception in _SYNC_ERROR_RESPONSES:
+        app.add_exception_handler(exception, _sync_exception_handler)
     return app

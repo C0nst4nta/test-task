@@ -2,6 +2,7 @@ import asyncio
 import uuid
 
 from ...worker import celery_app
+from .. import models
 
 
 class SyncDispatchError(Exception):
@@ -16,4 +17,5 @@ async def enqueue_sync_run(run_id: uuid.UUID) -> None:
             args=[str(run_id)],
         )
     except Exception:
+        await models.sync_run_fail(run_id, 'Failed to publish synchronization task')
         raise SyncDispatchError

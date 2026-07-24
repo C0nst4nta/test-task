@@ -49,8 +49,9 @@ async def _execute_sync(run_id: uuid.UUID) -> bool:
 
     await database.connect()
     try:
-        run = await models.sync_run_claim(run_id)
-        if run is None:
+        try:
+            run = await models.sync_run_claim(run_id)
+        except models.SyncRunNotClaimable:
             logger.info('Synchronization run %s is no longer queued', run_id)
             return False
         await executor.execute(run)
@@ -89,11 +90,12 @@ async def _requeue_interrupted() -> None:
     database = _create_database(settings)
     await database.connect()
     try:
+        await models.sync_items_requeue_interrupted()
         requeued = await models.sync_runs_requeue_interrupted()
         if requeued:
-            logger.warning('Requeued %s interrupted synchronization runs', requeued)
-        for run_id in await models.sync_run_queued_ids():
-            celery_app.send_task('sync.execute', args=[str(run_id)])
+            logger.warning('Requeued %s interrupted synchronization runs', len(requeued))
+        for run in await models.sync_runs_queued():
+            celery_app.send_task('sync.execute', args=[str(run['id'])])
     finally:
         await database.disconnect()
 

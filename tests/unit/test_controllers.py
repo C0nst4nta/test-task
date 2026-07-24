@@ -1,6 +1,5 @@
 import uuid
 
-import fastapi
 import pytest
 
 from src.api import controllers
@@ -26,49 +25,38 @@ async def test_create_sync_run(sync_run, monkeypatch):
     assert result == sync_run
 
 
-async def test_create_sync_run_maps_queue_failure(sync_run, monkeypatch):
+async def test_create_sync_run_propagates_queue_failure(sync_run, monkeypatch):
     async def create(**kwargs):
         return sync_run
 
     async def enqueue(run_id):
         raise services.SyncDispatchError
 
-    failed = {}
-
-    async def fail(run_id, error_message):
-        failed.update(run_id=run_id, error_message=error_message)
-
     monkeypatch.setattr(models, 'sync_run_create', create)
-    monkeypatch.setattr(models, 'sync_run_fail', fail)
     monkeypatch.setattr(services, 'enqueue_sync_run', enqueue)
 
-    with pytest.raises(fastapi.HTTPException) as exc_info:
+    with pytest.raises(services.SyncDispatchError):
         await controllers.create_sync_run(schemas.SyncRunCreate())
 
-    assert exc_info.value.status_code == 503
-    assert failed['run_id'] == sync_run['id']
 
-
-async def test_create_sync_run_maps_active_conflict(monkeypatch):
+async def test_create_sync_run_propagates_active_conflict(monkeypatch):
     async def create(**kwargs):
         raise models.SyncAlreadyActive
 
     monkeypatch.setattr(models, 'sync_run_create', create)
 
-    with pytest.raises(fastapi.HTTPException) as exc_info:
+    with pytest.raises(models.SyncAlreadyActive):
         await controllers.create_sync_run(schemas.SyncRunCreate())
-    assert exc_info.value.status_code == 409
 
 
-async def test_retry_sync_run_maps_not_found(monkeypatch):
+async def test_retry_sync_run_propagates_not_found(monkeypatch):
     async def retry(run_id):
         raise models.SyncRunDoesNotExist
 
     monkeypatch.setattr(models, 'sync_run_retry', retry)
 
-    with pytest.raises(fastapi.HTTPException) as exc_info:
+    with pytest.raises(models.SyncRunDoesNotExist):
         await controllers.retry_sync_run(uuid.uuid4())
-    assert exc_info.value.status_code == 404
 
 
 async def test_retry_sync_run_enqueues_retry(sync_run, monkeypatch):
@@ -89,37 +77,34 @@ async def test_retry_sync_run_enqueues_retry(sync_run, monkeypatch):
     assert enqueued == [sync_run['id']]
 
 
-async def test_retry_sync_run_maps_non_retryable(monkeypatch):
+async def test_retry_sync_run_propagates_non_retryable(monkeypatch):
     async def retry(run_id):
         raise models.SyncRunNotRetryable
 
     monkeypatch.setattr(models, 'sync_run_retry', retry)
 
-    with pytest.raises(fastapi.HTTPException) as exc_info:
+    with pytest.raises(models.SyncRunNotRetryable):
         await controllers.retry_sync_run(uuid.uuid4())
-    assert exc_info.value.status_code == 409
 
 
-async def test_retry_sync_run_maps_active_conflict(monkeypatch):
+async def test_retry_sync_run_propagates_active_conflict(monkeypatch):
     async def retry(run_id):
         raise models.SyncAlreadyActive
 
     monkeypatch.setattr(models, 'sync_run_retry', retry)
 
-    with pytest.raises(fastapi.HTTPException) as exc_info:
+    with pytest.raises(models.SyncAlreadyActive):
         await controllers.retry_sync_run(uuid.uuid4())
-    assert exc_info.value.status_code == 409
 
 
-async def test_get_sync_run_maps_not_found(monkeypatch):
+async def test_get_sync_run_propagates_not_found(monkeypatch):
     async def get(run_id):
         raise models.SyncRunDoesNotExist
 
     monkeypatch.setattr(models, 'sync_run_detail', get)
 
-    with pytest.raises(fastapi.HTTPException) as exc_info:
+    with pytest.raises(models.SyncRunDoesNotExist):
         await controllers.get_sync_run(uuid.uuid4())
-    assert exc_info.value.status_code == 404
 
 
 async def test_list_sync_runs_builds_pagination(sync_run, monkeypatch):

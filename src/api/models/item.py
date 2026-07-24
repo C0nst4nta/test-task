@@ -57,8 +57,8 @@ SyncItem = sqlalchemy.Table(
 sqlalchemy.Index('ix_sync_item_run_status', SyncItem.c.run_id, SyncItem.c.status)
 
 
-def _as_dict(row) -> dict | None:
-    return dict(row) if row is not None else None
+def _as_dict(row) -> dict:
+    return dict(row)
 
 
 @postgres.session
@@ -119,8 +119,8 @@ async def sync_failed_payloads(
 async def sync_item_start_attempt(
     session: sqlalchemy.ext.asyncio.AsyncSession,
     item_id: uuid.UUID,
-) -> None:
-    await session.execute(
+) -> dict:
+    result = await session.execute(
         SyncItem.update()
         .where(SyncItem.c.id == item_id)
         .values(
@@ -128,8 +128,10 @@ async def sync_item_start_attempt(
             attempts=SyncItem.c.attempts + 1,
             started_at=sqlalchemy.func.coalesce(SyncItem.c.started_at, sqlalchemy.func.now()),
             error_message=None,
-        ),
+        )
+        .returning(SyncItem),
     )
+    return _as_dict(result.mappings().one())
 
 
 @postgres.session
@@ -137,8 +139,8 @@ async def sync_item_succeed(
     session: sqlalchemy.ext.asyncio.AsyncSession,
     item_id: uuid.UUID,
     destination_response: dict,
-) -> None:
-    await session.execute(
+) -> dict:
+    result = await session.execute(
         SyncItem.update()
         .where(SyncItem.c.id == item_id)
         .values(
@@ -146,8 +148,10 @@ async def sync_item_succeed(
             destination_response=destination_response,
             error_message=None,
             finished_at=sqlalchemy.func.now(),
-        ),
+        )
+        .returning(SyncItem),
     )
+    return _as_dict(result.mappings().one())
 
 
 @postgres.session
@@ -155,13 +159,28 @@ async def sync_item_fail(
     session: sqlalchemy.ext.asyncio.AsyncSession,
     item_id: uuid.UUID,
     error_message: str,
-) -> None:
-    await session.execute(
+) -> dict:
+    result = await session.execute(
         SyncItem.update()
         .where(SyncItem.c.id == item_id)
         .values(
             status=schemas.SyncItemStatus.FAILED.value,
             error_message=error_message,
             finished_at=sqlalchemy.func.now(),
-        ),
+        )
+        .returning(SyncItem),
     )
+    return _as_dict(result.mappings().one())
+
+
+@postgres.session
+async def sync_items_requeue_interrupted(
+    session: sqlalchemy.ext.asyncio.AsyncSession,
+) -> list[dict]:
+    result = await session.execute(
+        SyncItem.update()
+        .where(SyncItem.c.status == schemas.SyncItemStatus.PROCESSING.value)
+        .values(status=schemas.SyncItemStatus.PENDING.value)
+        .returning(SyncItem),
+    )
+    return [dict(row) for row in result.mappings().all()]

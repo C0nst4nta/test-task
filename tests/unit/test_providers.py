@@ -38,6 +38,21 @@ async def test_system_a_client_maps_http_error():
     await http_client.aclose()
 
 
+async def test_system_a_client_hides_connection_details():
+    async def handler(request):
+        raise httpx.ConnectError('secret host details', request=request)
+
+    http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url='http://system-a.test',
+    )
+    client = providers.SystemAClient('http://unused', timeout=1, client=http_client)
+
+    with pytest.raises(providers.ExternalSystemError, match='System A is unavailable'):
+        await client.fetch_employees()
+    await http_client.aclose()
+
+
 async def test_system_b_client_maps_and_sends_record(employee):
     async def handler(request):
         assert request.url.path == f'/records/{employee.external_id}'

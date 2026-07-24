@@ -70,18 +70,22 @@ async def test_requeue_interrupted_runs(monkeypatch):
     run_id = uuid.uuid4()
     published = []
 
-    async def requeue():
-        return 2
+    async def requeue_items():
+        return []
 
-    async def queued_ids():
-        return [run_id]
+    async def requeue_runs():
+        return [{'id': uuid.uuid4()}, {'id': uuid.uuid4()}]
+
+    async def queued_runs():
+        return [{'id': run_id}]
 
     def send_task(name, args):
         published.append((name, args))
 
     monkeypatch.setattr(tasks, '_create_database', lambda settings: database)
-    monkeypatch.setattr(models, 'sync_runs_requeue_interrupted', requeue)
-    monkeypatch.setattr(models, 'sync_run_queued_ids', queued_ids)
+    monkeypatch.setattr(models, 'sync_items_requeue_interrupted', requeue_items)
+    monkeypatch.setattr(models, 'sync_runs_requeue_interrupted', requeue_runs)
+    monkeypatch.setattr(models, 'sync_runs_queued', queued_runs)
     monkeypatch.setattr(tasks.celery_app, 'send_task', send_task)
 
     await tasks._requeue_interrupted()

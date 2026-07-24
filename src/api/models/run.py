@@ -20,6 +20,10 @@ class SyncRunNotRetryable(Exception):
     """Raised when retry is requested for a non-terminal run."""
 
 
+class SyncRunNotClaimable(Exception):
+    """Raised when a synchronization run is no longer queued."""
+
+
 SyncRun = sqlalchemy.Table(
     'sync_run',
     postgres.metadata,
@@ -93,7 +97,11 @@ sqlalchemy.Index(
 )
 
 
-def _as_dict(row) -> dict | None:
+def _as_dict(row) -> dict:
+    return dict(row)
+
+
+def _as_optional_dict(row) -> dict | None:
     return dict(row) if row is not None else None
 
 
@@ -234,14 +242,17 @@ async def sync_current(session: sqlalchemy.ext.asyncio.AsyncSession) -> dict:
     )
     active = (await session.execute(active_query)).mappings().one_or_none()
     last = (await session.execute(last_query)).mappings().one_or_none()
-    return {'active_run': _as_dict(active), 'last_run': _as_dict(last)}
+    return {
+        'active_run': _as_optional_dict(active),
+        'last_run': _as_optional_dict(last),
+    }
 
 
 @postgres.session
 async def sync_run_claim(
     session: sqlalchemy.ext.asyncio.AsyncSession,
     run_id: uuid.UUID,
-) -> dict | None:
+) -> dict:
     query = (
         SyncRun.update()
         .where(
@@ -257,36 +268,34 @@ async def sync_run_claim(
         .returning(SyncRun)
     )
     run = (await session.execute(query)).mappings().one_or_none()
+    if run is None:
+        raise SyncRunNotClaimable
     return _as_dict(run)
 
 
 @postgres.session
 async def sync_runs_requeue_interrupted(
     session: sqlalchemy.ext.asyncio.AsyncSession,
-) -> int:
-    await session.execute(
-        SyncItem.update()
-        .where(SyncItem.c.status == schemas.SyncItemStatus.PROCESSING.value)
-        .values(status=schemas.SyncItemStatus.PENDING.value),
-    )
+) -> list[dict]:
     result = await session.execute(
         SyncRun.update()
         .where(SyncRun.c.status == schemas.SyncRunStatus.RUNNING.value)
-        .values(status=schemas.SyncRunStatus.QUEUED.value),
+        .values(status=schemas.SyncRunStatus.QUEUED.value)
+        .returning(SyncRun),
     )
-    return result.rowcount
+    return [dict(row) for row in result.mappings().all()]
 
 
 @postgres.session
-async def sync_run_queued_ids(
+async def sync_runs_queued(
     session: sqlalchemy.ext.asyncio.AsyncSession,
-) -> list[uuid.UUID]:
+) -> list[dict]:
     result = await session.execute(
-        sqlalchemy.select(SyncRun.c.id)
+        SyncRun.select()
         .where(SyncRun.c.status == schemas.SyncRunStatus.QUEUED.value)
         .order_by(SyncRun.c.queued_at.asc()),
     )
-    return list(result.scalars().all())
+    return [dict(row) for row in result.mappings().all()]
 
 
 @postgres.session
@@ -332,13 +341,15 @@ async def sync_run_fail(
     session: sqlalchemy.ext.asyncio.AsyncSession,
     run_id: uuid.UUID,
     error_message: str,
-) -> None:
-    await session.execute(
+) -> dict:
+    result = await session.execute(
         SyncRun.update()
         .where(SyncRun.c.id == run_id)
         .values(
             status=schemas.SyncRunStatus.FAILED.value,
             error_message=error_message,
             finished_at=sqlalchemy.func.now(),
-        ),
+        )
+        .returning(SyncRun),
     )
+    return _as_dict(result.mappings().one())

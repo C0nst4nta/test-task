@@ -1,9 +1,14 @@
 import contextlib
+import uuid
 
 import fastapi
 import httpx
+import pytest
 
 from src import api
+from src.api import controllers
+from src.api import models
+from src.api import services
 from src.core import conf
 from src.core import web
 
@@ -81,3 +86,33 @@ async def test_custom_validation_handler():
 
     assert response.status_code == 422
     assert response.json()['detail'][0]['type'] == 'int_parsing'
+
+
+@pytest.mark.parametrize(
+    ('error', 'status_code'),
+    [
+        (models.SyncAlreadyActive(), 409),
+        (models.SyncRunDoesNotExist(), 404),
+        (models.SyncRunNotRetryable(), 409),
+        (services.SyncDispatchError(), 503),
+    ],
+)
+async def test_sync_exception_handler(error, status_code, monkeypatch):
+    async def get(run_id):
+        raise error
+
+    monkeypatch.setattr(controllers, 'get_sync_run', get)
+    database = DatabaseStub()
+    app = api.create_app(
+        settings=conf.Settings(schedule_enabled=False),
+        database=database,
+    )
+
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url='http://test',
+        ) as client:
+            response = await client.get(f'/v1/sync-runs/{uuid.uuid4()}')
+
+    assert response.status_code == status_code
