@@ -82,19 +82,19 @@ def _patch_model_repository(monkeypatch):
     return state
 
 
-async def test_executor_tracks_successes_and_item_failures(employee, monkeypatch):
+async def test_employee_sync_tracks_successes_and_item_failures(employee, monkeypatch):
     failed = employee.model_copy(update={'external_id': 'employee-failed'})
     source = SourceStub([employee, failed])
     destination = DestinationStub(failed_ids={failed.external_id})
-    handler = services.EmployeeSyncHandler(source, destination)
-    executor = services.SyncExecutor(
-        {schemas.SyncType.EMPLOYEES: handler},
+    sync_service = services.EmployeeSyncService(
+        source,
+        destination,
         max_retries=2,
         retry_delay_seconds=0,
     )
     state = _patch_model_repository(monkeypatch)
 
-    await executor.execute({
+    await sync_service.execute({
         'id': uuid.uuid4(),
         'sync_type': 'employees',
         'retry_of_id': None,
@@ -107,17 +107,17 @@ async def test_executor_tracks_successes_and_item_failures(employee, monkeypatch
     assert state['items'][failed.external_id]['attempts'] == 2
 
 
-async def test_executor_retries_source_and_marks_run_failed(monkeypatch):
+async def test_employee_sync_retries_source_and_marks_run_failed(monkeypatch):
     source = SourceStub(error=providers.ExternalSystemError('System A is unavailable'))
-    handler = services.EmployeeSyncHandler(source, DestinationStub())
-    executor = services.SyncExecutor(
-        {schemas.SyncType.EMPLOYEES: handler},
+    sync_service = services.EmployeeSyncService(
+        source,
+        DestinationStub(),
         max_retries=2,
         retry_delay_seconds=0,
     )
     state = _patch_model_repository(monkeypatch)
 
-    await executor.execute({
+    await sync_service.execute({
         'id': uuid.uuid4(),
         'sync_type': 'employees',
         'retry_of_id': None,
@@ -128,11 +128,11 @@ async def test_executor_retries_source_and_marks_run_failed(monkeypatch):
     assert state['run_error'] == 'System A is unavailable'
 
 
-async def test_executor_retry_uses_failed_snapshots(employee, monkeypatch):
+async def test_employee_sync_retry_uses_failed_snapshots(employee, monkeypatch):
     source = SourceStub(error=AssertionError('source should not be called'))
-    handler = services.EmployeeSyncHandler(source, DestinationStub())
-    executor = services.SyncExecutor(
-        {schemas.SyncType.EMPLOYEES: handler},
+    sync_service = services.EmployeeSyncService(
+        source,
+        DestinationStub(),
         max_retries=1,
         retry_delay_seconds=0,
     )
@@ -142,7 +142,7 @@ async def test_executor_retry_uses_failed_snapshots(employee, monkeypatch):
         return [employee.model_dump(mode='json')]
 
     monkeypatch.setattr(models, 'sync_failed_payloads', failed_payloads)
-    await executor.execute({
+    await sync_service.execute({
         'id': uuid.uuid4(),
         'sync_type': 'employees',
         'retry_of_id': uuid.uuid4(),

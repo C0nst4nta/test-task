@@ -39,10 +39,9 @@ async def _execute_sync(run_id: uuid.UUID) -> bool:
         settings.system_b_base_url,
         settings.external_api_timeout_seconds,
     )
-    executor = services.SyncExecutor(
-        handlers={
-            schemas.SyncType.EMPLOYEES: services.EmployeeSyncHandler(source, destination),
-        },
+    sync_service = services.EmployeeSyncService(
+        source,
+        destination,
         max_retries=settings.external_api_max_retries,
         retry_delay_seconds=settings.external_api_retry_delay_seconds,
     )
@@ -54,11 +53,11 @@ async def _execute_sync(run_id: uuid.UUID) -> bool:
         except models.SyncRunNotClaimable:
             logger.info('Synchronization run %s is no longer queued', run_id)
             return False
-        await executor.execute(run)
+        await sync_service.execute(run)
         return True
     finally:
-        await source.close()
-        await destination.close()
+        await source.aclose()
+        await destination.aclose()
         await database.disconnect()
 
 

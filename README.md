@@ -73,7 +73,7 @@ src/api/schemas/             входные и выходные Pydantic-схе�
 src/api/models/              таблицы SQLAlchemy Core и запросы к БД
 src/api/controllers/         orchestration и преобразование ошибок в HTTP
 src/api/providers/           заменяемые HTTP-клиенты систем A и B
-src/api/services/            executor и публикация задач Celery
+src/api/services/            бизнес-логика синхронизации и публикация задач Celery
 src/api/v1/endpoints/        тонкие FastAPI endpoints
 src/worker/                  Celery application, worker tasks и beat schedule
 src/migrations/postgres/     Alembic-миграции
@@ -139,11 +139,9 @@ HTTP, а их base URL задаются через `SYNC_SYSTEM_A_BASE_URL` и
 
 ### Добавление новых типов синхронизации
 
-`SyncExecutor` использует registry `sync_type → handler`. Новый тип добавляется как
-отдельный handler с операциями `fetch/send`, Pydantic-контракт и запись в registry.
-Общие Celery worker, beat, история, retry и таблицы остаются без изменений. Если у типа
-появится собственная политика расписания, её следует хранить в таблице конфигураций и
-планировать независимо по `sync_type`.
+Сейчас сервис реализует единственный тип синхронизации — сотрудников. Новый тип следует
+добавлять отдельным сервисом со своим Pydantic-контрактом и provider-адаптерами. Общие
+Celery worker, beat, история, retry и таблицы можно использовать повторно.
 
 ## Разработка через Docker Compose
 

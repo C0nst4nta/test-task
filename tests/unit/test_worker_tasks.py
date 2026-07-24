@@ -30,10 +30,10 @@ async def test_execute_sync_claims_specific_run(monkeypatch):
         def __init__(self, *args):
             pass
 
-        async def close(self):
+        async def aclose(self):
             pass
 
-    class ExecutorStub:
+    class SyncServiceStub:
         def __init__(self, *args, **kwargs):
             pass
 
@@ -43,7 +43,7 @@ async def test_execute_sync_claims_specific_run(monkeypatch):
     monkeypatch.setattr(tasks, '_create_database', lambda settings: database)
     monkeypatch.setattr(tasks.providers, 'SystemAClient', ClientStub)
     monkeypatch.setattr(tasks.providers, 'SystemBClient', ClientStub)
-    monkeypatch.setattr(tasks.services, 'SyncExecutor', ExecutorStub)
+    monkeypatch.setattr(tasks.services, 'EmployeeSyncService', SyncServiceStub)
     monkeypatch.setattr(models, 'sync_run_claim', claim)
 
     assert await tasks._execute_sync(run_id) is True

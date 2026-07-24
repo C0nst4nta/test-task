@@ -5,14 +5,40 @@ from .system_a import ExternalSystemError
 
 
 class SystemBClient:
-    def __init__(
+    def __init__(self, base_url: str, timeout: float):
+        self._base_url = (base_url or '').rstrip('/')
+        self._base_headers = {'Accept': 'application/json'}
+        self._session = httpx.AsyncClient(timeout=timeout)
+
+    async def _request(
         self,
-        base_url: str,
-        timeout: float,
-        client: httpx.AsyncClient | None = None,
-    ) -> None:
-        self._client = client or httpx.AsyncClient(base_url=base_url, timeout=timeout)
-        self._owns_client = client is None
+        method: str,
+        path: str,
+        headers: dict | None = None,
+        *,
+        json: dict | None = None,
+        params: dict | None = None,
+        **kwargs,
+    ) -> dict | list:
+        url = f'{self._base_url}/{path.lstrip("/")}'
+        merged_headers = {**self._base_headers, **(headers or {})}
+        try:
+            response = await self._session.request(
+                method,
+                url,
+                headers=merged_headers,
+                json=json,
+                params=params,
+                **kwargs,
+            )
+            response.raise_for_status()
+            return response.json() if response.content else None
+        except httpx.HTTPStatusError as error:
+            raise ExternalSystemError(
+                f'System B returned HTTP {error.response.status_code}',
+            )
+        except httpx.HTTPError:
+            raise ExternalSystemError('System B is unavailable')
 
     async def upsert_employee(
         self,
@@ -24,20 +50,12 @@ class SystemBClient:
             department=employee.department,
             source_updated_at=employee.updated_at,
         )
-        try:
-            response = await self._client.put(
-                f'/records/{employee.external_id}',
-                json=payload.model_dump(mode='json'),
-            )
-            response.raise_for_status()
-            return schemas.SystemBResponse.model_validate(response.json())
-        except httpx.HTTPStatusError as error:
-            raise ExternalSystemError(
-                f'System B returned HTTP {error.response.status_code}',
-            )
-        except (httpx.HTTPError, ValueError):
-            raise ExternalSystemError('System B is unavailable')
+        raw = await self._request(
+            'PUT',
+            f'/records/{employee.external_id}',
+            json=payload.model_dump(mode='json'),
+        )
+        return schemas.SystemBResponse.model_validate(raw)
 
-    async def close(self) -> None:
-        if self._owns_client:
-            await self._client.aclose()
+    async def aclose(self) -> None:
+        await self._session.aclose()
