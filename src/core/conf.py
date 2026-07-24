@@ -19,7 +19,7 @@ class Settings(pydantic_settings.BaseSettings):
     log_level: str = 'info'
     debug: bool = False
 
-    database_url: str = 'postgresql+asyncpg://sync:sync@localhost:55432/sync'
+    database_url: str = 'postgresql+asyncpg://sync:sync@postgres:5432/sync'
     database_pool_size: int = 5
     database_max_overflow: int = 10
 

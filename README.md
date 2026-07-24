@@ -14,7 +14,8 @@ cp .env.example .env
 docker compose up --build
 ```
 
-При старте контейнер API применит миграции. После этого доступны:
+Compose содержит только `postgres` и `api`. API дожидается готовности PostgreSQL,
+применяет Alembic-миграции и затем запускает web-сервер. После этого доступны:
 
 - Swagger UI: <http://localhost:8000/docs>
 - health check: <http://localhost:8000/health>
@@ -44,10 +45,16 @@ curl http://localhost:8000/v1/sync-runs/<run_id>
 curl -X POST http://localhost:8000/v1/sync-runs/<run_id>/retry
 ```
 
-Для демонстрации частичной ошибки можно запустить сервис с fault injection:
+Для демонстрации частичной ошибки задайте в `.env`:
+
+```dotenv
+SYNC_MOCK_SYSTEM_B_FAIL_IDS=employee-003
+```
+
+Затем пересоздайте API:
 
 ```bash
-SYNC_MOCK_SYSTEM_B_FAIL_IDS=employee-003 docker compose up --build
+docker compose up --build --force-recreate api
 ```
 
 После исчерпания retry один элемент будет `failed`, а весь запуск —
@@ -145,23 +152,38 @@ HTTP endpoint только вставляет `sync_run(status=queued)`. Worker 
 появится собственная политика расписания, её следует хранить в таблице конфигураций и
 планировать независимо по `sync_type`.
 
-## Локальная разработка
+## Разработка через Docker Compose
+
+PostgreSQL и API запускаются через Docker Compose. Локальные проверки используют
+стандартный `venv` и `pip`.
 
 ```bash
-make bootstrap
 cp .env.example .env
-docker compose up -d postgres
-make migrate
+make bootstrap
+make build
+make run
+```
+
+Проверки запускаются локально через Makefile:
+
+```bash
 make lint
 make test
-python -m src.api
+make format
 ```
 
-Сгенерировать миграцию:
+Применить или сгенерировать миграцию:
 
 ```bash
+make migrate
 make migration M=add_new_field
 ```
+
+Alembic запускается локально из `.venv`. Makefile поднимает только PostgreSQL и
+подключается к нему через `localhost:55432`.
+
+Остановить сервисы можно через `make stop`. Команда `make clean` дополнительно удаляет
+Compose volumes вместе с локальными данными PostgreSQL.
 
 ## Что изменить для production
 

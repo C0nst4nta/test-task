@@ -1,22 +1,26 @@
 .DEFAULT: help
-.PHONY: help run stop bootstrap migrate migration lint format test clean
+.PHONY: help run stop postgres bootstrap build migrate migration lint format test clean
 
 
 VENV_DIR=.venv
 PYTHON=$(VENV_DIR)/bin/python
+BOOTSTRAP_STAMP=$(VENV_DIR)/.bootstrap
+LOCAL_DATABASE_URL?=postgresql+asyncpg://sync:sync@localhost:55432/sync
 
 
 help:
 	@echo "Please use \`$(MAKE) <target>' where <target> is one of the following:"
 	@echo "  run        - start PostgreSQL and the API with Docker Compose"
 	@echo "  stop       - stop Docker Compose services"
-	@echo "  bootstrap  - create the virtual environment and install dependencies"
+	@echo "  postgres   - start only PostgreSQL with Docker Compose"
+	@echo "  bootstrap  - create venv and install development dependencies with pip"
+	@echo "  build      - build the API image"
 	@echo "  migrate    - apply PostgreSQL migrations"
 	@echo "  migration  - create a migration; M argument is mandatory"
 	@echo "  lint       - inspect project source code"
 	@echo "  format     - format project source code"
 	@echo "  test       - run tests"
-	@echo "  clean      - remove local build and test artifacts"
+	@echo "  clean      - stop services and remove Compose volumes"
 
 run:
 	docker compose up --build
@@ -24,16 +28,23 @@ run:
 stop:
 	docker compose down
 
-bootstrap: $(VENV_DIR)/bin/activate
-$(VENV_DIR)/bin/activate:
-	uv venv $(VENV_DIR)
-	uv sync --all-extras --python $(PYTHON)
+postgres:
+	docker compose up -d postgres
 
-migrate: bootstrap
-	$(PYTHON) -m src.cli upgrade head
+build:
+	docker compose build
 
-migration: bootstrap
-	$(PYTHON) -m src.cli revision --autogenerate -m "$(M)"
+bootstrap: $(BOOTSTRAP_STAMP)
+$(BOOTSTRAP_STAMP):
+	python3 -m venv $(VENV_DIR)
+	$(PYTHON) -m pip install -e '.[test]'
+	touch $(BOOTSTRAP_STAMP)
+
+migrate: bootstrap postgres
+	SYNC_DATABASE_URL=$(LOCAL_DATABASE_URL) $(PYTHON) -m src.cli upgrade head
+
+migration: bootstrap postgres
+	SYNC_DATABASE_URL=$(LOCAL_DATABASE_URL) $(PYTHON) -m src.cli revision --autogenerate -m "$(M)"
 
 lint: bootstrap
 	$(PYTHON) -m ruff check src tests
@@ -45,4 +56,4 @@ test: bootstrap
 	$(PYTHON) -m pytest
 
 clean:
-	rm -rf $(VENV_DIR) build htmlcov sync_service.egg-info .coverage .pytest_cache .ruff_cache
+	docker compose down --volumes --remove-orphans
