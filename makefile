@@ -7,7 +7,7 @@ PYTHON=$(VENV_DIR)/bin/python
 ALEMBIC=$(VENV_DIR)/bin/alembic
 ALEMBIC_CONFIG=src/migrations/postgres/alembic.ini
 BOOTSTRAP_STAMP=$(VENV_DIR)/.bootstrap
-LOCAL_DATABASE_URL?=postgresql+asyncpg://sync:sync@localhost:55432/sync
+LOCAL_DATABASE_URL?=postgresql+asyncpg://sync:sync@localhost:5432/sync
 
 
 help:

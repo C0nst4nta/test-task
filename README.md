@@ -1,34 +1,37 @@
 # Synchronization Service
 
-Backend-прототип сервиса синхронизации данных из системы A в систему B.
+A backend prototype that synchronizes employee data from System A to System B.
 
-Стек: Python 3.12+ · FastAPI · PostgreSQL · SQLAlchemy Core · asyncpg · Alembic ·
+Stack: Python 3.12+ · FastAPI · PostgreSQL · SQLAlchemy Core · asyncpg · Alembic ·
 Celery · Redis · Pydantic v2 · httpx.
 
-## Быстрый запуск
+## Quick start
 
-Нужен Docker с Compose plugin.
+Docker with the Compose plugin is required.
 
 ```bash
 cp .env.example .env
 docker compose up --build
 ```
 
-Перед запуском укажите в `.env` доступные из Docker network адреса внешних систем:
+Before starting the application, configure external system addresses in `.env`. The
+addresses must be reachable from the Docker network:
 
 ```dotenv
 SYNC_SYSTEM_A_BASE_URL=http://system-a:8000
 SYNC_SYSTEM_B_BASE_URL=http://system-b:8000
 ```
 
-Compose запускает `postgres`, `redis`, `api`, `worker` и `beat`. API применяет
-Alembic-миграции и запускает web-сервер, worker исполняет задачи Celery, а beat
-публикует периодические запуски. После этого доступны:
+Docker Compose starts `postgres`, `redis`, `api`, `worker`, and `beat`. The API service
+applies Alembic migrations before starting the web server. The worker executes Celery
+tasks, while beat schedules periodic synchronization runs.
+
+The following endpoints are then available:
 
 - Swagger UI: <http://localhost:8000/docs>
-- health check: <http://localhost:8000/health>
+- Health check: <http://localhost:8000/health>
 
-Ручной запуск синхронизации:
+Start a synchronization manually:
 
 ```bash
 curl -X POST http://localhost:8000/v1/sync-runs \
@@ -36,8 +39,8 @@ curl -X POST http://localhost:8000/v1/sync-runs \
   -d '{"sync_type":"employees"}'
 ```
 
-Endpoint сразу возвращает `202 Accepted` и запуск в состоянии `queued`. Сама работа
-выполняется Celery worker. Состояние можно проверить так:
+The endpoint immediately returns `202 Accepted` with a run in the `queued` state. A
+Celery worker performs the actual synchronization. Check its state with:
 
 ```bash
 curl http://localhost:8000/v1/sync-runs/current
@@ -45,7 +48,7 @@ curl http://localhost:8000/v1/sync-runs
 curl http://localhost:8000/v1/sync-runs/<run_id>
 ```
 
-Повторить неуспешную синхронизацию:
+Retry an unsuccessful synchronization:
 
 ```bash
 curl -X POST http://localhost:8000/v1/sync-runs/<run_id>/retry
@@ -53,100 +56,132 @@ curl -X POST http://localhost:8000/v1/sync-runs/<run_id>/retry
 
 ## API
 
-| Метод и путь | Назначение |
+| Method and path | Description |
 | --- | --- |
-| `POST /v1/sync-runs` | Поставить ручную синхронизацию в очередь |
-| `GET /v1/sync-runs/current` | Текущий активный и последний завершённый запуск |
-| `GET /v1/sync-runs` | История с пагинацией и фильтрами |
-| `GET /v1/sync-runs/{id}` | Запуск и результаты по каждому объекту |
-| `POST /v1/sync-runs/{id}/retry` | Повторить failed-объекты отдельным запуском |
-| `GET /health` | Проверить API и соединение с PostgreSQL |
+| `POST /v1/sync-runs` | Queue a manual synchronization run |
+| `GET /v1/sync-runs/current` | Return the active and most recent finished runs |
+| `GET /v1/sync-runs` | Return paginated and filtered run history |
+| `GET /v1/sync-runs/{id}` | Return a run and its per-item results |
+| `POST /v1/sync-runs/{id}/retry` | Retry failed items in a separate run |
+| `GET /health` | Check the API and PostgreSQL connection |
 
-История фильтруется по `status`, `trigger` и `sync_type`; поддерживает `limit` и
-`offset`.
+Run history can be filtered by `status`, `trigger`, and `sync_type`. Pagination uses
+`limit` and `offset`.
 
-## Структура
+## Project structure
 
 ```text
-src/core/                    конфигурация, PostgreSQL, фабрика web-приложения
-src/api/schemas/             входные и выходные Pydantic-схемы
-src/api/models/              таблицы SQLAlchemy Core и запросы к БД
-src/api/controllers/         orchestration и преобразование ошибок в HTTP
-src/api/providers/           заменяемые HTTP-клиенты систем A и B
-src/api/services/            бизнес-логика синхронизации и публикация задач Celery
-src/api/v1/endpoints/        тонкие FastAPI endpoints
-src/worker/                  Celery application, worker tasks и beat schedule
-src/migrations/postgres/     Alembic-миграции
-tests/                       unit/API tests
+src/core/                    configuration, PostgreSQL, and web application factory
+src/api/schemas/             Pydantic request, response, and provider schemas
+src/api/models/              SQLAlchemy Core tables and database queries
+src/api/controllers/         API use-case orchestration
+src/api/providers/           HTTP clients for Systems A and B
+src/api/services/            synchronization logic and Celery task dispatch
+src/api/v1/endpoints/        thin FastAPI endpoints
+src/worker/                  Celery application, worker tasks, and beat schedule
+src/migrations/postgres/     Alembic migrations
+tests/                       unit and API tests
 ```
 
-Структура и стиль повторяют подход проекта `1wash`: src-layout, слои
-`schemas → models → controllers → endpoints`, async I/O, SQLAlchemy Core, отдельные
-provider-адаптеры, один импорт на строку, одинарные кавычки и длина строки 95 символов.
+The structure and style follow the `1wash` approach: a `src` layout, separated
+`schemas → models → controllers → endpoints` layers, asynchronous I/O, SQLAlchemy
+Core, dedicated provider adapters, one import per line, single quotes, and a 95-character
+line limit.
 
-## Архитектурные решения и допущения
+## Architecture and assumptions
 
-### Сущности и структура БД
+### Database entities
 
-Выделены две основные сущности.
+The service has two main entities.
 
-`sync_run` — один запуск. Хранит тип синхронизации, причину запуска (`manual`,
-`scheduled`, `retry`), общий статус, счётчики, общую ошибку и временные метки. Поле
-`retry_of_id` связывает новую попытку с исходным запуском. Частичный уникальный индекс
-не разрешает одновременно иметь два `queued`/`running` запуска одного `sync_type`.
+`sync_run` represents one synchronization run. It stores the synchronization type,
+trigger (`manual`, `scheduled`, or `retry`), status, counters, run-level error, and
+timestamps. `retry_of_id` links a retry to its original run. A partial unique index
+prevents two `queued` or `running` runs of the same `sync_type` from existing at the
+same time.
 
-`sync_item` — результат обработки одного объекта в рамках запуска. Здесь находятся
-external ID, исходный snapshot, ответ системы B, status, число попыток, ошибка и
-временные метки. Snapshot нужен для аудита и позволяет повторять только failed-объекты,
-не полагаясь на изменившееся состояние системы A.
+`sync_item` represents one employee processed within a run. It stores the external ID,
+source snapshot, System B response, status, attempt count, error, and timestamps. The
+snapshot provides an audit trail and allows the service to retry only failed items
+without depending on the current state of System A.
 
-Отдельная локальная таблица сотрудников не создавалась: сервис оркестрирует передачу,
-а владельцами данных остаются A и B. Дублирование доменной модели без отдельного
-бизнес-требования создало бы третий источник истины.
+There is no separate local employee table. The service orchestrates data transfer,
+while Systems A and B remain the data owners. A duplicated domain model would create a
+third source of truth without a supporting business requirement.
 
-### Фоновая обработка
+### Background processing
 
-HTTP endpoint вставляет `sync_run(status=queued)` и публикует UUID запуска в Redis.
-Celery worker атомарно переводит именно этот запуск из `queued` в `running` и выполняет
-обработку. Поэтому долгий внешний вызов не живёт внутри HTTP request, а повторная
-доставка того же сообщения не запускает уже начатую работу второй раз.
+The HTTP endpoint inserts a `sync_run` with the `queued` status and publishes its UUID
+to Redis. The Celery worker atomically changes that specific run from `queued` to
+`running` before processing it. Long-running external calls therefore do not happen
+inside an HTTP request, and repeated delivery of the same message cannot start an
+already claimed run twice.
 
-Celery beat публикует задачу планирования каждые 300 секунд. Интервал настраивается
-через `SYNC_SCHEDULE_INTERVAL_SECONDS`. При старте worker незавершённые `running`
-запуски возвращаются в очередь, а все `queued` задачи публикуются повторно; успешные
-items не отправляются повторно.
+Celery beat publishes a scheduling task every 300 seconds. The interval is configured
+with `SYNC_SCHEDULE_INTERVAL_SECONDS`. When a worker starts, interrupted `running` runs
+are returned to the queue and all `queued` runs are published again. Items that already
+succeeded are not sent again.
 
-Семантика доставки — at least once, поэтому endpoint системы B должен реализовывать
-идемпотентный upsert по `external_id`.
+Delivery semantics are at least once. System B must therefore implement an idempotent
+upsert by `external_id`.
 
-### Ошибки
+### Synchronization flow
 
-- Временные ошибки A/B повторяются заданное число раз с exponential backoff.
-- Ошибка получения списка из A завершает весь запуск как `failed`.
-- Ошибка отдельной записи в B сохраняется в `sync_item`; остальные записи продолжают
-  обрабатываться. Итог — `partially_completed` или `failed`.
-- Наружу не возвращаются traceback и детали драйвера БД.
-- Retry создаёт новый аудируемый запуск и обрабатывает failed snapshots исходного.
-- Ограничение БД защищает от гонки двух ручных/периодических запусков одного типа.
+`EmployeeSyncService` coordinates one complete run:
 
-### Подключение внешних API
+1. For a regular run, it fetches employees from System A.
+2. For a retry, it loads failed snapshots from the original run.
+3. It stores one `sync_item` snapshot for every employee.
+4. It sends each pending item to System B.
+5. It records the response or error for every item.
+6. It calculates and stores the final `sync_run` status and counters.
 
-Бизнес-логика зависит от `SystemAClient` и `SystemBClient`. Оба клиента работают по
-HTTP, а их base URL задаются через `SYNC_SYSTEM_A_BASE_URL` и
-`SYNC_SYSTEM_B_BASE_URL`. Система A должна отдавать записи через `GET /records`, а
-система B принимать idempotent upsert через `PUT /records/{external_id}`. Авторизация
-и mapping конкретного внешнего контракта добавляются в provider-адаптеры.
+A completed run receives one of these statuses:
 
-### Добавление новых типов синхронизации
+- `completed` when every item succeeded;
+- `partially_completed` when only some items succeeded;
+- `failed` when the source request failed or every processed item failed.
 
-Сейчас сервис реализует единственный тип синхронизации — сотрудников. Новый тип следует
-добавлять отдельным сервисом со своим Pydantic-контрактом и provider-адаптерами. Общие
-Celery worker, beat, история, retry и таблицы можно использовать повторно.
+### Error handling and retries
 
-## Разработка через Docker Compose
+- Temporary System A and System B errors use exponential backoff.
+- Failure to fetch employees from System A fails the entire run.
+- Failure to send one employee to System B is stored in `sync_item`; processing
+  continues for the remaining employees.
+- Tracebacks and database driver details are not exposed through the API.
+- A retry creates a new auditable run and processes failed snapshots from the original.
+- A database constraint prevents concurrent manual and scheduled runs of the same type.
 
-PostgreSQL, Redis, API, Celery worker и beat запускаются через Docker Compose. Локальные
-проверки используют стандартный `venv` и `pip`.
+### External API contracts
+
+The synchronization service depends on `SystemAClient` and `SystemBClient`. Their base
+URLs are configured with `SYNC_SYSTEM_A_BASE_URL` and `SYNC_SYSTEM_B_BASE_URL`.
+
+System A must expose:
+
+```http
+GET /records
+```
+
+System B must expose an idempotent upsert endpoint:
+
+```http
+PUT /records/{external_id}
+```
+
+The current prototype does not use API keys. Provider adapters are the appropriate
+place to add authentication or map a different external contract in the future.
+
+### Adding synchronization types
+
+The service currently supports employee synchronization only. Add another type as a
+separate service with its own Pydantic contract and provider adapters. The Celery
+worker, beat scheduler, history, retry mechanism, and database tables can be reused.
+
+## Development
+
+PostgreSQL, Redis, the API, Celery worker, and beat run through Docker Compose. Local
+checks use a standard virtual environment and pip.
 
 ```bash
 cp .env.example .env
@@ -154,7 +189,7 @@ make bootstrap
 docker compose up --build
 ```
 
-Проверки запускаются локально через Makefile:
+Run local checks through the Makefile:
 
 ```bash
 make lint
@@ -162,33 +197,32 @@ make test
 make format
 ```
 
-Применить или сгенерировать миграцию:
+Apply migrations or generate a new migration:
 
 ```bash
 make migrate
 make migration M=add_new_field
 ```
 
-Alembic запускается локально из `.venv` и подключается к уже запущенному PostgreSQL
-через `localhost:55432`.
+Alembic runs locally from `.venv` and connects to the Docker PostgreSQL instance at
+`localhost:5432`.
 
-Остановить сервисы можно через `docker compose down`. Команда `make clean` удаляет
-локальное виртуальное окружение, Python/test-кэши, coverage и build artifacts.
+Stop the services with `docker compose down`. `make clean` removes the local virtual
+environment, Python and test caches, coverage data, and build artifacts.
 
-## Что изменить для production
+## Production considerations
 
-- заменить Redis на отказоустойчивый Redis/Sentinel или RabbitMQ при требованиях к HA;
-- запускать ровно один экземпляр beat либо использовать распределённый scheduler;
-- настроить OAuth2/RBAC для внутренней админ-системы;
-- хранить secrets в secret manager и включить TLS для внешних API;
-- добавить OpenTelemetry, Prometheus-метрики, correlation ID и alerting;
-- определить retention/архивацию больших payload и маскирование персональных данных;
-- добавить rate limiting, circuit breaker и jitter к retry;
-- зафиксировать SLA внешних систем и политику reconciliation;
-- добавить CI, integration/contract tests и zero-downtime migration policy.
+- Use a highly available Redis deployment, Redis Sentinel, or RabbitMQ when required.
+- Run exactly one beat instance or use a distributed scheduler.
+- Add OAuth2/RBAC for the internal administration API.
+- Store secrets in a secret manager and enable TLS for external APIs.
+- Add OpenTelemetry, Prometheus metrics, correlation IDs, and alerting.
+- Define retention, payload archival, and personal data masking policies.
+- Add rate limiting and a circuit breaker for external systems.
+- Define external system SLAs and a reconciliation policy.
+- Add CI, integration and contract tests, and a zero-downtime migration policy.
 
-## Не включено
+## Out of scope
 
-Авторизация и production deployment намеренно не реализованы по условиям задания.
-Публикация в GitHub также остаётся за владельцем репозитория: после создания remote
-достаточно закоммитить проект и отправить ветку.
+Authentication and production deployment are intentionally excluded from this
+prototype. Publishing the repository to GitHub is also left to the repository owner.

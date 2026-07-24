@@ -1,88 +1,42 @@
 services:
   postgres:
     image: postgres:17-alpine
-    env_file:
-      - path: .env.example
-      - path: .env
-        required: false
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
-      interval: 2s
-      timeout: 2s
-      retries: 15
+    env_file: .env
     ports:
-      - "55432:5432"
+      - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
 
   redis:
     image: redis:7-alpine
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 2s
-      timeout: 2s
-      retries: 15
 
   api:
     build: .
-    env_file:
-      - path: .env.example
-      - path: .env
-        required: false
+    env_file: .env
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      - postgres
+      - redis
     command:
       - /bin/sh
       - -c
       - alembic -c src/migrations/postgres/alembic.ini upgrade head && python -m src.api
     ports:
       - "8000:8000"
-    volumes:
-      - ./src:/app/src
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
-      interval: 2s
-      timeout: 2s
-      retries: 15
 
   worker:
     build: .
-    env_file:
-      - path: .env.example
-      - path: .env
-        required: false
+    env_file: .env
     depends_on:
-      api:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      - postgres
+      - redis
     command: celery -A src.worker.app:celery_app worker --loglevel=INFO
-    volumes:
-      - ./src:/app/src
 
   beat:
     build: .
-    env_file:
-      - path: .env.example
-      - path: .env
-        required: false
+    env_file: .env
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      - redis
     command: celery -A src.worker.app:celery_app beat --loglevel=INFO
-    volumes:
-      - ./src:/app/src
 
 volumes:
   postgres-data:
