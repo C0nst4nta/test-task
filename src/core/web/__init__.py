@@ -1,5 +1,2 @@
-from .app import create_app
-from .server import create_server
-
-
-__all__ = ['create_app', 'create_server']
+from .app import create_app  # noqa: F401
+from .server import create_server  # noqa: F401

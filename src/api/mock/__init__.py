@@ -1,4 +1,1 @@
-from .routers import get_router
-
-
-__all__ = ['get_router']
+from .routers import get_router  # noqa: F401
