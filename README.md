@@ -3,7 +3,7 @@
 Backend-прототип сервиса синхронизации данных из системы A в систему B.
 
 Стек: Python 3.12+ · FastAPI · PostgreSQL · SQLAlchemy Core · asyncpg · Alembic ·
-Pydantic v2 · httpx.
+Celery · Redis · Pydantic v2 · httpx.
 
 ## Быстрый запуск
 
@@ -14,13 +14,19 @@ cp .env.example .env
 docker compose up --build
 ```
 
-Compose содержит только `postgres` и `api`. API дожидается готовности PostgreSQL,
-применяет Alembic-миграции и затем запускает web-сервер. После этого доступны:
+Перед запуском укажите в `.env` доступные из Docker network адреса внешних систем:
+
+```dotenv
+SYNC_SYSTEM_A_BASE_URL=http://system-a:8000
+SYNC_SYSTEM_B_BASE_URL=http://system-b:8000
+```
+
+Compose запускает `postgres`, `redis`, `api`, `worker` и `beat`. API применяет
+Alembic-миграции и запускает web-сервер, worker исполняет задачи Celery, а beat
+публикует периодические запуски. После этого доступны:
 
 - Swagger UI: <http://localhost:8000/docs>
 - health check: <http://localhost:8000/health>
-- mock системы A: <http://localhost:8000/mock/system-a/records>
-- содержимое mock системы B: <http://localhost:8000/mock/system-b/records>
 
 Ручной запуск синхронизации:
 
@@ -31,7 +37,7 @@ curl -X POST http://localhost:8000/v1/sync-runs \
 ```
 
 Endpoint сразу возвращает `202 Accepted` и запуск в состоянии `queued`. Сама работа
-выполняется фоновым worker. Состояние можно проверить так:
+выполняется Celery worker. Состояние можно проверить так:
 
 ```bash
 curl http://localhost:8000/v1/sync-runs/current
@@ -44,22 +50,6 @@ curl http://localhost:8000/v1/sync-runs/<run_id>
 ```bash
 curl -X POST http://localhost:8000/v1/sync-runs/<run_id>/retry
 ```
-
-Для демонстрации частичной ошибки задайте в `.env`:
-
-```dotenv
-SYNC_MOCK_SYSTEM_B_FAIL_IDS=employee-003
-```
-
-Затем пересоздайте API:
-
-```bash
-docker compose up --build --force-recreate api
-```
-
-После исчерпания retry один элемент будет `failed`, а весь запуск —
-`partially_completed`. Отказ системы A включается переменной
-`SYNC_MOCK_SYSTEM_A_FAIL=true`.
 
 ## API
 
@@ -83,9 +73,9 @@ src/api/schemas/             входные и выходные Pydantic-схе�
 src/api/models/              таблицы SQLAlchemy Core и запросы к БД
 src/api/controllers/         orchestration и преобразование ошибок в HTTP
 src/api/providers/           заменяемые HTTP-клиенты систем A и B
-src/api/services/            executor, DB-backed worker и scheduler
+src/api/services/            executor и публикация задач Celery
 src/api/v1/endpoints/        тонкие FastAPI endpoints
-src/api/mock/                mock HTTP API систем A и B
+src/worker/                  Celery application, worker tasks и beat schedule
 src/migrations/postgres/     Alembic-миграции
 tests/                       unit/API tests
 ```
@@ -116,16 +106,18 @@ external ID, исходный snapshot, ответ системы B, status, ч�
 
 ### Фоновая обработка
 
-HTTP endpoint только вставляет `sync_run(status=queued)`. Worker атомарно забирает
-следующий запуск через `SELECT ... FOR UPDATE SKIP LOCKED`, переводит его в `running`
-и выполняет обработку. Поэтому долгий внешний вызов не живёт внутри HTTP request.
+HTTP endpoint вставляет `sync_run(status=queued)` и публикует UUID запуска в Redis.
+Celery worker атомарно переводит именно этот запуск из `queued` в `running` и выполняет
+обработку. Поэтому долгий внешний вызов не живёт внутри HTTP request, а повторная
+доставка того же сообщения не запускает уже начатую работу второй раз.
 
-Планировщик использует ту же команду постановки в очередь каждые 300 секунд. Интервал
-настраивается через `SYNC_SCHEDULE_INTERVAL_SECONDS`. При рестарте незавершённый
-`running` запуск возвращается в очередь; успешные items не отправляются повторно.
+Celery beat публикует задачу планирования каждые 300 секунд. Интервал настраивается
+через `SYNC_SCHEDULE_INTERVAL_SECONDS`. При старте worker незавершённые `running`
+запуски возвращаются в очередь, а все `queued` задачи публикуются повторно; успешные
+items не отправляются повторно.
 
-Семантика доставки — at least once. Mock B, как и ожидаемый реальный endpoint,
-реализует idempotent upsert по `external_id`.
+Семантика доставки — at least once, поэтому endpoint системы B должен реализовывать
+идемпотентный upsert по `external_id`.
 
 ### Ошибки
 
@@ -137,31 +129,31 @@ HTTP endpoint только вставляет `sync_run(status=queued)`. Worker 
 - Retry создаёт новый аудируемый запуск и обрабатывает failed snapshots исходного.
 - Ограничение БД защищает от гонки двух ручных/периодических запусков одного типа.
 
-### Замена mock на реальные API
+### Подключение внешних API
 
-Бизнес-логика зависит от `SystemAClient` и `SystemBClient`, а не от mock-хранилища.
-Оба клиента уже работают по HTTP. Для интеграции достаточно изменить base URL и при
-необходимости добавить в provider авторизацию и mapping реального контракта. Mock API
-находится в отдельном router и не импортируется executor.
+Бизнес-логика зависит от `SystemAClient` и `SystemBClient`. Оба клиента работают по
+HTTP, а их base URL задаются через `SYNC_SYSTEM_A_BASE_URL` и
+`SYNC_SYSTEM_B_BASE_URL`. Система A должна отдавать записи через `GET /records`, а
+система B принимать idempotent upsert через `PUT /records/{external_id}`. Авторизация
+и mapping конкретного внешнего контракта добавляются в provider-адаптеры.
 
 ### Добавление новых типов синхронизации
 
 `SyncExecutor` использует registry `sync_type → handler`. Новый тип добавляется как
 отдельный handler с операциями `fetch/send`, Pydantic-контракт и запись в registry.
-Общие worker, scheduler, история, retry и таблицы остаются без изменений. Если у типа
+Общие Celery worker, beat, история, retry и таблицы остаются без изменений. Если у типа
 появится собственная политика расписания, её следует хранить в таблице конфигураций и
 планировать независимо по `sync_type`.
 
 ## Разработка через Docker Compose
 
-PostgreSQL и API запускаются через Docker Compose. Локальные проверки используют
-стандартный `venv` и `pip`.
+PostgreSQL, Redis, API, Celery worker и beat запускаются через Docker Compose. Локальные
+проверки используют стандартный `venv` и `pip`.
 
 ```bash
 cp .env.example .env
 make bootstrap
-make build
-make run
+docker compose up --build
 ```
 
 Проверки запускаются локально через Makefile:
@@ -179,20 +171,18 @@ make migrate
 make migration M=add_new_field
 ```
 
-Alembic запускается локально из `.venv`. Makefile поднимает только PostgreSQL и
-подключается к нему через `localhost:55432`.
+Alembic запускается локально из `.venv` и подключается к уже запущенному PostgreSQL
+через `localhost:55432`.
 
-Остановить сервисы можно через `make stop`. Команда `make clean` дополнительно удаляет
-Compose volumes вместе с локальными данными PostgreSQL.
+Остановить сервисы можно через `docker compose down`. Команда `make clean` удаляет
+локальное виртуальное окружение, Python/test-кэши, coverage и build artifacts.
 
 ## Что изменить для production
 
-- вынести API, scheduler и worker в отдельные процессы/контейнеры;
-- использовать полноценный task broker (RabbitMQ/Kafka) либо оставить PostgreSQL queue
-  с отдельным процессом и `LISTEN/NOTIFY` вместо polling;
-- добавить distributed scheduler leader election;
+- заменить Redis на отказоустойчивый Redis/Sentinel или RabbitMQ при требованиях к HA;
+- запускать ровно один экземпляр beat либо использовать распределённый scheduler;
 - настроить OAuth2/RBAC для внутренней админ-системы;
-- хранить secrets в secret manager, включить TLS и ограничить mock endpoints;
+- хранить secrets в secret manager и включить TLS для внешних API;
 - добавить OpenTelemetry, Prometheus-метрики, correlation ID и alerting;
 - определить retention/архивацию больших payload и маскирование персональных данных;
 - добавить rate limiting, circuit breaker и jitter к retry;

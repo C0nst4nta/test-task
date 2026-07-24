@@ -30,7 +30,6 @@ async def test_create_app_lifecycle_and_health():
     app = api.create_app(
         settings=settings,
         database=database,
-        start_background_services=False,
     )
 
     async with app.router.lifespan_context(app):
@@ -50,7 +49,6 @@ async def test_health_returns_unavailable():
     app = api.create_app(
         settings=conf.Settings(schedule_enabled=False),
         database=database,
-        start_background_services=False,
     )
 
     async with app.router.lifespan_context(app):

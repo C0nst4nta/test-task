@@ -4,6 +4,7 @@ import fastapi
 
 from .. import models
 from .. import schemas
+from .. import services
 
 
 def _already_active_exception() -> fastapi.HTTPException:
@@ -15,17 +16,19 @@ def _already_active_exception() -> fastapi.HTTPException:
 
 async def create_sync_run(sync: schemas.SyncRunCreate) -> dict:
     try:
-        return await models.sync_run_create(
+        run = await models.sync_run_create(
             trigger=schemas.SyncTrigger.MANUAL,
             sync_type=sync.sync_type,
         )
     except models.SyncAlreadyActive:
         raise _already_active_exception()
+    await _enqueue(run)
+    return run
 
 
 async def retry_sync_run(run_id: uuid.UUID) -> dict:
     try:
-        return await models.sync_run_retry(run_id)
+        run = await models.sync_run_retry(run_id)
     except models.SyncRunDoesNotExist:
         raise fastapi.HTTPException(status_code=404, detail='Synchronization run not found')
     except models.SyncRunNotRetryable:
@@ -35,6 +38,19 @@ async def retry_sync_run(run_id: uuid.UUID) -> dict:
         )
     except models.SyncAlreadyActive:
         raise _already_active_exception()
+    await _enqueue(run)
+    return run
+
+
+async def _enqueue(run: dict) -> None:
+    try:
+        await services.enqueue_sync_run(run['id'])
+    except services.SyncDispatchError:
+        await models.sync_run_fail(run['id'], 'Failed to publish synchronization task')
+        raise fastapi.HTTPException(
+            status_code=503,
+            detail='Synchronization queue is unavailable',
+        )
 
 
 async def get_sync_run(run_id: uuid.UUID) -> dict:
